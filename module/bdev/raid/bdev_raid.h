@@ -7,7 +7,8 @@
 #define SPDK_BDEV_RAID_INTERNAL_H
 
 #define MATRIX_REBUILD_SIZE 32768 /* should be < syzeof(int64_t) and power of 2 */
-#define ATOMIC_DATA(name) uint64_t name
+#define ATOMIC_TYPE uint64_t
+#define ATOMIC_DATA(name) ATOMIC_TYPE name
 #define ATOMIC_SNAPSHOT_TYPE uint64_t /* atomic type can be converted to the type */
 #define ATOMIC_SNAPSHOT(name) ATOMIC_SNAPSHOT_TYPE name
 #define LEN_AREA_STR_IN_BIT sizeof(ATOMIC_SNAPSHOT_TYPE)*8
