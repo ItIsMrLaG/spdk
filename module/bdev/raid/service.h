@@ -93,4 +93,13 @@ struct rebuild_progress {
 int
 run_rebuild_poller(void* arg);
 
+void
+continue_rebuild(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg);
+
+struct iteration_step *
+alloc_cb_arg(int64_t iter_idx, int16_t area_idx, struct rebuild_cycle_iteration *iteration, struct raid_bdev *raid_bdev);
+
+void
+free_cd_arg(struct iteration_step *cb);
+
 #endif /* SPDK_RAID_SERVICE_INTERNAL_H */

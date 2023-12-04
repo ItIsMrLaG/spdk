@@ -27,7 +27,7 @@
 /*
  * The function shold be run after rebuilding of concrete area from iteration
  */
-void
+static inline void
 partly_submit_iteration(bool result ,uint64_t iter_idx, uint16_t area_idx, struct raid_rebuild *rebuild)
 {
     struct rebuild_cycle_iteration *iter = &(rebuild->cycle_progress->cycle_iteration);
@@ -149,14 +149,14 @@ init_rebuild_cycle(struct rebuild_progress *cycle_progress, struct raid_bdev *ra
 static inline int64_t
 get_iter_idx(int64_t prev_idx, struct raid_bdev *raid_bdev)
 {
-    int64_t next_idx = NOT_NEED_REBUILD;
     struct rebuild_progress *cycle_progress = raid_bdev->rebuild->cycle_progress;
 
-    for (int64_t i = prev_idx + 1; i < raid_bdev->rebuild->num_memory_areas; i++)
+    for (int64_t i = prev_idx + 1; i < (int64_t)raid_bdev->rebuild->num_memory_areas; i++)
     {
         if (!SPDK_TEST_BIT(&(cycle_progress->area_proection[b_GET_IDX_BP(i)]), b_GET_SHFT_BP(i))) continue;
         return i;
     }
+    return NOT_NEED_REBUILD;
 }
 
 static inline void
@@ -171,7 +171,7 @@ finish_rebuild_cycle(struct raid_rebuild *rebuild)
     SPDK_REMOVE_BIT(fl(rebuild), REBUILD_FLAG_IN_PROGRESS);
 }
 
-void
+static inline void
 init_cycle_iteration(struct raid_rebuild *rebuild, int64_t curr_idx)
 {
     struct rebuild_cycle_iteration *cycle_iter = &(rebuild->cycle_progress->cycle_iteration);
@@ -225,7 +225,7 @@ continue_rebuild(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
     int64_t next_iter_idx;
     int ret = 0;
 
-    free_cb_arg(cb_arg);
+    free_cd_arg(cb_arg);
     spdk_bdev_free_io(bdev_io);
     partly_submit_iteration(success, iter_idx, area_idx, raid_bdev->rebuild);
 
