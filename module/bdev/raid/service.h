@@ -9,10 +9,10 @@
 #define NOT_NEED_REBUILD -1
 //->
 //TODO: Надо проверить, что побитовые макросы с указателями нормально работают, а то я вообще хз, мб тут ошибка
-#define IS_AREA_STR_CLEAR(area_srt) (area_srt)
+#define ATOMIC_IS_AREA_STR_CLEAR(area_srt) (area_srt)
 #define CREATE_AREA_STR_SNAPSHOT(area_srt_ptr) (*area_srt_ptr)
 #define ATOMIC_INCREMENT(ptr) ((*ptr)++)
-#define EXCHANGE(dest_ptr, exc, src) (TEST_CAS(dest_ptr, exc, src))
+#define ATOMIC_EXCHANGE(dest_ptr, exc, src) (TEST_CAS(dest_ptr, exc, src))
 // ->
 // TODO: индексы у битов идут справа на лево!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! (все норм?)
 #define b_BASE_TYPE uint64_t
@@ -20,21 +20,6 @@
 #define b_GET_IDX_BP(x) (x / (sizeof(b_BASE_TYPE)*8))
 #define b_GET_SHFT_BP(x) (x % (sizeof(b_BASE_TYPE)*8))
 //
-/*
-#define b_IMD_SIZE 2 /* size of metadata per area in bites *
-#define b_RSUCCESS 1 /* successful area rebuild (status) *
-#define b_RFAIL 3 /* unsuccessful area rebuild (status) *
-#define b_FULL 3 /* all bits of MD equals 1 *
-#define b_ITERATION_MD(name) b_BASE_TYPE name[SPDK_CEIL_DIV((sizeof(ATOMIC_SNAPSHOT_TYPE)*b_IMD_SIZE), sizeof(b_BASE_TYPE))]
-
-#define b_GET_IDX_IMD(b_idx) ((b_idx*b_IMD_SIZE) / (sizeof(b_BASE_TYPE)))
-#define b_GET_SHFT_IMD(b_idx) ((b_idx*b_IMD_SIZE) % (b_BASE_TYPE))
-
-#define b_IS_AREA_REBUILD_PROGRESS(imd, b_idx) ((imd[b_GET_IDX_IMD(b_idx)] & (b_FULL << b_GET_SHFT_IMD(b_idx))) == 0)
-#define b_IS_AREA_REBUILD_SUCCESS(imd, b_idx) ((imd[b_GET_IDX_IMD(b_idx)] & (b_RSUCCESS << b_GET_SHFT_IMD(b_idx))) == (b_RSUCCESS << b_GET_SHFT_IMD(b_idx)))
-#define b_IS_AREA_REBUILD_FAIL(imd, b_idx) ((imd[b_GET_IDX_IMD(b_idx)] & (b_RFAIL << b_GET_SHFT_IMD(b_idx))) == (b_RFAIL << b_GET_SHFT_IMD(b_idx)))
-// ->
-*/
 
 static inline bool
 TEST_CAS(ATOMIC_TYPE *ptr, ATOMIC_SNAPSHOT_TYPE exc, ATOMIC_SNAPSHOT_TYPE src)
@@ -60,7 +45,7 @@ struct rebuild_cycle_iteration
    /* true if one part of the rebuild cycle is completed */
     bool complete;
 
-    /* index of the area stripe */
+    /* index of the area stripe for rebuld */
     int64_t iter_idx;
 
     /* number of broken areas in current area stripe */
