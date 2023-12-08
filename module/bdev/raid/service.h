@@ -1,7 +1,13 @@
+/*   SPDX-License-Identifier: BSD-3-Clause
+ *   Copyright (C) 2018 Intel Corporation.
+ *   All rights reserved.
+ */
+
 #ifndef SPDK_RAID_SERVICE_INTERNAL_H
 #define SPDK_RAID_SERVICE_INTERNAL_H
 
 #include "spdk/queue.h"
+#include "bdev_raid.h"
 
 //->
 #define __base_desc_from_raid_bdev(raid_bdev, idx) (raid_bdev->base_bdev_info[idx].desc)
@@ -37,6 +43,7 @@ struct iteration_step
     int16_t area_idx;
     struct rebuild_cycle_iteration *iteration;
     struct raid_bdev *raid_bdev;
+    // spdk_bdev_io_completion_cb cb;
 };
 
 
@@ -87,6 +94,14 @@ struct rebuild_progress {
      * The fild describes the rebuild of this area stripe.
      */
     struct rebuild_cycle_iteration cycle_iteration;
+
+    /*
+     * Buffers for raid base_bdevs.
+     * Each element - SG-buffer (array of iovec); 
+     * Size of each SG-buffer is size of one memory area in bytes; 
+     * One element from SG-buffer describes buffer size equals size of one strip in bytes.
+     */
+    struct iovec* base_bdevs_sg_buf[BASE_BDEVS_MAX_NUM];
 };
 
 
@@ -99,7 +114,18 @@ continue_rebuild(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg);
 struct iteration_step *
 alloc_cb_arg(int64_t iter_idx, int16_t area_idx, struct rebuild_cycle_iteration *iteration, struct raid_bdev *raid_bdev);
 
+void 
+init_cb_arg(struct iteration_step *iter_info, 
+            int64_t iter_idx, 
+            int16_t area_idx, 
+            struct rebuild_cycle_iteration *iteration, 
+            struct raid_bdev *raid_bdev);
+
+
 void
 free_cd_arg(struct iteration_step *cb);
+
+void
+reset_buffer(struct iovec *vec_array, uint32_t len);
 
 #endif /* SPDK_RAID_SERVICE_INTERNAL_H */

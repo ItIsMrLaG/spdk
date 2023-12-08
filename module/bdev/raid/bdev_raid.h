@@ -6,6 +6,9 @@
 #ifndef SPDK_BDEV_RAID_INTERNAL_H
 #define SPDK_BDEV_RAID_INTERNAL_H
 
+#include "spdk/bdev_module.h"
+#include "spdk/uuid.h"
+
 #define MATRIX_REBUILD_SIZE 32768 /* should be < syzeof(int64_t) and power of 2 */
 #define ATOMIC_TYPE uint64_t
 #define ATOMIC_DATA(name) ATOMIC_TYPE name
@@ -13,10 +16,9 @@
 #define ATOMIC_SNAPSHOT(name) ATOMIC_SNAPSHOT_TYPE name
 #define LEN_AREA_STR_IN_BIT sizeof(ATOMIC_SNAPSHOT_TYPE)*8
 
-#include "spdk/bdev_module.h"
-#include "spdk/uuid.h"
+#define BASE_BDEVS_MAX_NUM 64
 
-#include "service.h"
+// #include "service.h"
 
 enum rebuild_flag {
 	/* rebuild flag set during initialization */

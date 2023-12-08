@@ -90,11 +90,12 @@ raid1_bdev_io_completion(struct spdk_bdev_io *bdev_io, bool success, void *cb_ar
 
 	get_current_bdev_idx(bdev_io, raid_io, &bdev_idx);
 
-	spdk_bdev_free_io(bdev_io);
 
 	if (!success) {
 		write_in_rbm_broken_block(bdev_io, raid_io, bdev_idx);
 	}
+
+	spdk_bdev_free_io(bdev_io);
 
 	raid_bdev_io_complete_part(raid_io, 1, success ?
 				   SPDK_BDEV_IO_STATUS_SUCCESS :
@@ -262,7 +263,7 @@ init_rebuild(struct raid_bdev *raid_bdev)
 {
 	uint64_t stripcnt = SPDK_CEIL_DIV(raid_bdev->bdev.blockcnt, raid_bdev->strip_size);
 	raid_bdev->rebuild->strips_per_area = SPDK_CEIL_DIV(stripcnt, MATRIX_REBUILD_SIZE);
-	raid_bdev->rebuild->num_memory_areas = SPDK_CEIL_DIV(stripcnt, raid_bdev->rebuild->strips_per_area);
+	raid_bdev->rebuild->num_memory_areas = stripcnt / raid_bdev->rebuild->strips_per_area;
 	raid_bdev->rebuild->rebuild_flag = REBUILD_FLAG_INIT_CONFIGURATION;
 	SPDK_SET_BIT(&(raid_bdev->rebuild->rebuild_flag), REBUILD_FLAG_INITIALIZED);
 }
@@ -326,7 +327,14 @@ raid1_submit_rebuild_request(struct raid_bdev *raid_bdev, struct rebuild_progres
     /* strip size in blocks */
     uint32_t strip_size = raid_bdev->strip_size;
     /* block size in bytes */
-    uint32_t block_size = raid_bdev->strip_size_kb / raid_bdev->strip_size;
+    uint32_t block_size = spdk_bdev_get_block_size(&(raid_bdev->bdev));
+
+	struct iteration_step *cb_arg = NULL;
+
+
+	
+
+	//TODO: Реализовать вот это.
 
 	return 0;
 }

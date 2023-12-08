@@ -1,5 +1,4 @@
- 
-/*   SPDX-License-Identifier: BSD-3-Clause
+ /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
  *   All rights reserved.
  */
@@ -41,7 +40,7 @@ partly_submit_iteration(bool result ,uint64_t iter_idx, uint16_t area_idx, struc
 }
 
 static inline void
-_free_sg_buffer_part(struct iovec *vec_array, uint32_t len)
+_free_sg_buffer_part(struct iovec *vec_array, uint64_t len)
 { //TODO: проверить, что оно работает (в for совсем неуверен)
     struct iovec *base_vec;
     //TODO: мб вообще не надо.
@@ -53,51 +52,90 @@ _free_sg_buffer_part(struct iovec *vec_array, uint32_t len)
 }
 
 static inline void
-free_sg_buffer (struct iovec **vec_array, uint32_t len)
+free_sg_buffer(struct iovec *vec_array, uint64_t len)
 {
     /* usage: struct iovec *a; free_sg_buffer(&a, b); */
-
-    _free_sg_buffer_part(*vec_array, len);
-    spdk_dma_free(*vec_array);
-    *vec_array = NULL;
+    if(len != 0)
+    {
+        _free_sg_buffer_part(vec_array, len);
+    }    
+    free(vec_array);
 }
 
 static inline struct iovec *
-allocate_sg_buffer(uint32_t elem_size, uint32_t elemcnt, uint32_t elem_per_vec)
+allocate_sg_buffer(size_t elem_size, size_t elemcnt, size_t elem_per_vec, size_t align)
 {
-    uint32_t split_steps = SPDK_CEIL_DIV(elemcnt, elem_per_vec);
-    uint32_t full_split_steps = elemcnt / elem_per_vec;
-    uint32_t tail_split_size_in_blocks = elemcnt - (full_split_steps * elem_per_vec);
+    size_t split_steps = SPDK_CEIL_DIV(elemcnt, elem_per_vec);
 
-    struct iovec *vec_array = spdk_dma_zmalloc(sizeof(struct iovec)*split_steps, 0, NULL);
+    struct iovec *vec_array = calloc(split_steps, sizeof(struct iovec));
     if(vec_array == NULL)
     {
         return NULL;
     }
 
-    if (split_steps != full_split_steps)
-    {
-        vec_array[0].iov_len = elem_size*tail_split_size_in_blocks;
-        vec_array[0].iov_base = (void*)spdk_dma_zmalloc(sizeof(uint8_t)*vec_array[0].iov_len, 0, NULL);
-        if(vec_array[0].iov_base == NULL)
-        {
-            spdk_dma_free(vec_array);
-            return NULL;
-        }
-    }
-
-    for (uint32_t i = 1; i < split_steps; i++)
+    for (size_t i = 0; i < split_steps; i++)
     { //TODO: люблю лажать с индексами, проверить, что все ок
         vec_array[i].iov_len = elem_size*elem_per_vec;
-        vec_array[i].iov_base = (void*)spdk_dma_zmalloc(sizeof(uint8_t)*vec_array[i].iov_len, 0, NULL);
+        vec_array[i].iov_base = (void*)spdk_dma_zmalloc(sizeof(uint8_t)*vec_array[i].iov_len, align, NULL);
         if(vec_array[i].iov_base == NULL)
         {
             _free_sg_buffer_part(vec_array, i);
-            spdk_dma_free(vec_array);
+            free(vec_array);
             return NULL;
         }
     }
     return vec_array;
+}
+
+void
+reset_buffer(struct iovec *vec_array, uint32_t len)
+{
+    struct iovec *base_vec;
+    if(len == 0) return;
+
+    for(base_vec = vec_array; base_vec < vec_array + len; base_vec++)
+    {
+        memset(base_vec->iov_base, 0, base_vec->iov_len);
+    }
+}
+
+static inline void
+_free_base_bdevs_buff(struct raid_bdev *raid_bdev, struct rebuild_progress *cycle_progress, uint8_t arr_num)
+{
+    for (uint8_t i = 0; i < arr_num; i++)
+    {
+        free_sg_buffer(cycle_progress->base_bdevs_sg_buf[i], raid_bdev->rebuild->strips_per_area);
+        cycle_progress->base_bdevs_sg_buf[i] = NULL;
+    }
+}
+
+static inline void
+free_base_bdevs_buff(struct raid_bdev *raid_bdev, struct rebuild_progress *cycle_progress)
+{
+    _free_base_bdevs_buff(raid_bdev, cycle_progress, raid_bdev->num_base_bdevs);
+}
+
+static inline int
+alloc_base_bdevs_buff(struct raid_bdev *raid_bdev, struct rebuild_progress *cycle_progress)
+{
+    uint64_t elem_size = spdk_bdev_get_block_size(&(raid_bdev->bdev));
+
+    for (uint8_t i = 0; i < raid_bdev->num_base_bdevs; i++)
+    {
+        struct spdk_bdev *bbdev = spdk_bdev_desc_get_bdev(raid_bdev->base_bdev_info[i].desc);
+        if(spdk_bdev_get_write_unit_size(bbdev) != 1)
+        {
+            SPDK_WARNLOG("Unsupported write_unit_size in base bdev of raid");
+        }
+        
+        cycle_progress->base_bdevs_sg_buf[i] = allocate_sg_buffer(elem_size, raid_bdev->rebuild->strips_per_area, raid_bdev->strip_size, bbdev->required_alignment);
+        if (cycle_progress->base_bdevs_sg_buf[i] == NULL)
+        {
+            _free_base_bdevs_buff(raid_bdev, cycle_progress, i);
+            return -ENOMEM;
+        }
+    }
+    return 0;
 }
 
 static inline uint16_t
@@ -160,12 +198,15 @@ get_iter_idx(int64_t prev_idx, struct raid_bdev *raid_bdev)
 }
 
 static inline void
-finish_rebuild_cycle(struct raid_rebuild *rebuild)
+finish_rebuild_cycle(struct raid_bdev *raid_bdev)
 {   
+    struct raid_rebuild *rebuild = raid_bdev->rebuild;
+
     if (rebuild == NULL)
     {
         return;
     }
+    free_base_bdevs_buff(raid_bdev, rebuild->cycle_progress); 
     free(rebuild->cycle_progress);
     rebuild->cycle_progress = NULL;
     SPDK_REMOVE_BIT(fl(rebuild), REBUILD_FLAG_IN_PROGRESS);
@@ -184,6 +225,14 @@ init_cycle_iteration(struct raid_rebuild *rebuild, int64_t curr_idx)
     cycle_iter->iter_progress = cycle_iter->snapshot;
 }
 
+void init_cb_arg(struct iteration_step *iter_info, int64_t iter_idx, int16_t area_idx, struct rebuild_cycle_iteration *iteration, struct raid_bdev *raid_bdev) 
+{
+    iter_info->area_idx = area_idx;
+    iter_info->iter_idx = iter_idx;
+    iter_info->iteration = iteration;
+    iter_info->raid_bdev = raid_bdev;
+}
+
 struct iteration_step *
 alloc_cb_arg(int64_t iter_idx, int16_t area_idx, struct rebuild_cycle_iteration *iteration, struct raid_bdev *raid_bdev)
 {
@@ -192,12 +241,7 @@ alloc_cb_arg(int64_t iter_idx, int16_t area_idx, struct rebuild_cycle_iteration 
     {
         return NULL;
     }
-
-    iter_info->area_idx = area_idx;
-    iter_info->iter_idx = iter_idx;
-    iter_info->iteration = iteration;
-    iter_info->raid_bdev = raid_bdev;
-
+    init_cb_arg(iter_info, iter_idx, area_idx, iteration, raid_bdev);
     return iter_info;
 }
 
@@ -240,7 +284,7 @@ continue_rebuild(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
     /* Wether it is the last iteration or not */
     if(cycle_progress->clear_area_str_cnt == cycle_progress->area_str_cnt)
     { //TODO: if clear_area_str_cnt - atomic => problem
-        finish_rebuild_cycle(raid_bdev->rebuild);
+        finish_rebuild_cycle(raid_bdev);
         return;
     }
 
@@ -318,9 +362,16 @@ run_rebuild_poller(void* arg)
     }
 
     if (raid_bdev->module->rebuild_request != NULL)
-    {
+    {   
         SPDK_SET_BIT(fl(rebuild), REBUILD_FLAG_IN_PROGRESS);
+
         init_cycle_iteration(rebuild, start_idx);
+        
+        if(alloc_base_bdevs_buff(raid_bdev, cycle_progress) != 0)
+        {
+            return -ENOMEM;
+        }
+        
         ret = raid_bdev->module->rebuild_request(raid_bdev, cycle_progress, continue_rebuild);
     } else {
         SPDK_ERRLOG("rebuild_request inside raid%d doesn't implemented\n", raid_bdev->level);
@@ -331,161 +382,161 @@ run_rebuild_poller(void* arg)
 
 // ===============================TESTs=========================================== //
 // TODO: мб не надо, переделать.
-struct container {
-    struct raid_bdev *raid_bdev;
-    int idx;
-    struct iovec * buff;
-} typedef container;
+// struct container {
+//     struct raid_bdev *raid_bdev;
+//     int idx;
+//     struct iovec * buff;
+// } typedef container;
 
 
-static inline struct iovec *
-alloc_continuous_buffer_part(size_t iovlen, size_t align)
-{
-    struct iovec *buf;
-    buf = spdk_dma_zmalloc(sizeof(struct iovec), 0, NULL);
-    if(buf == NULL)
-    {
-        return NULL;
-    }
+// static inline struct iovec *
+// alloc_continuous_buffer_part(size_t iovlen, size_t align)
+// {
+//     struct iovec *buf;
+//     buf = spdk_dma_zmalloc(sizeof(struct iovec), 0, NULL);
+//     if(buf == NULL)
+//     {
+//         return NULL;
+//     }
 
-    buf->iov_len = iovlen;
-    buf->iov_base = spdk_dma_zmalloc(sizeof(uint8_t)*(buf->iov_len), 0, NULL);
-    if(buf->iov_base == NULL)
-    {
-        spdk_dma_free(buf);
-        return NULL;
-    }
+//     buf->iov_len = iovlen;
+//     buf->iov_base = spdk_dma_zmalloc(sizeof(uint8_t)*(buf->iov_len), 0, NULL);
+//     if(buf->iov_base == NULL)
+//     {
+//         spdk_dma_free(buf);
+//         return NULL;
+//     }
 
-    return buf;
-}
+//     return buf;
+// }
 
-static inline void
-free_continuous_buffer_part(struct iovec * buf_elem)
-{
-    spdk_dma_free(buf_elem->iov_base);
-    spdk_dma_free(buf_elem);
-}
-
-
-static inline int
-fill_ones_write_request(struct iovec * buf_array, int buf_len)
-{
-    // не учитывает align внутри iov_base
-    SPDK_WARNLOG("i'm here 2 \n");
-
-    if(buf_len > _MUX_BUF_LENGTH)
-    {
-        return -1;
-    }
-    for(size_t i = 0; i<buf_len; i++)
-    {
-        SPDK_WARNLOG("i'm here 3 \n");
-        *((uint8_t *)(buf_array[i].iov_base)) = UINT8_MAX;
-        SPDK_WARNLOG("i'm here 4 \n");
-        SPDK_WARNLOG("%d", UINT8_MAX);
-        SPDK_WARNLOG("i'm here 5 \n");
-
-    }
-
-    return 0;
-}
-
-void
-cd_read_func(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
-{
-    container *cont = cb_arg;
-    if(success)
-    {
-        SPDK_WARNLOG("test (read) success\n");
-        SPDK_WARNLOG("\n\n test = %d \n\n", *((uint8_t*)cont->buff->iov_base));
-    } else {
-        SPDK_ERRLOG("test (read) fail\n");
-    }
-
-    free_continuous_buffer_part(cont->buff);
-    spdk_bdev_free_io(bdev_io);
-    free(cont);
-    SPDK_WARNLOG("test (read) success\n");
-}
-
-void
-cd_write_func(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
-{
-    container *cont = cb_arg;
-    if(success)
-    {
-        SPDK_WARNLOG("test (write) success\n");
-    } else {
-        SPDK_ERRLOG("test (write) fail\n");
-    }
-
-    free_continuous_buffer_part(cont->buff);
-    spdk_bdev_free_io(bdev_io);
-    submit_read_request_base_bdev(cont->raid_bdev, cont->idx);
-    free(cont);
-}
-
-void
-submit_write_request_base_bdev(struct raid_bdev *raid_bdev, uint8_t idx)
-{
-    struct spdk_bdev_desc *desc = __base_desc_from_raid_bdev(raid_bdev, idx);
-    struct spdk_bdev *base_bdev = spdk_bdev_desc_get_bdev(desc);
-    struct spdk_io_channel *ch = spdk_bdev_get_io_channel(desc);
-    struct iovec *buffer;
-    container *cont;
-    int ret;
+// static inline void
+// free_continuous_buffer_part(struct iovec * buf_elem)
+// {
+//     spdk_dma_free(buf_elem->iov_base);
+//     spdk_dma_free(buf_elem);
+// }
 
 
-    buffer = alloc_continuous_buffer_part(base_bdev->blocklen, base_bdev->required_alignment);
-    if (fill_ones_write_request(buffer, 1) != 0)
-    {
-        SPDK_ERRLOG("fill_ones_write_request was fail\n");
-    }
-    cont = calloc(1, sizeof(container));
-    if (cont == NULL){
-        SPDK_ERRLOG("cont alloc failed\n");
-    }
+// static inline int
+// fill_ones_write_request(struct iovec * buf_array, int buf_len)
+// {
+//     // не учитывает align внутри iov_base
+//     SPDK_WARNLOG("i'm here 2 \n");
 
-    cont->buff = buffer;
-    cont->idx = 0;
-    cont->raid_bdev = raid_bdev;
-    ret = spdk_bdev_writev_blocks (desc, ch, buffer, 1, 0, 1, cd_write_func, cont);
+//     if(buf_len > _MUX_BUF_LENGTH)
+//     {
+//         return -1;
+//     }
+//     for(size_t i = 0; i<buf_len; i++)
+//     {
+//         SPDK_WARNLOG("i'm here 3 \n");
+//         *((uint8_t *)(buf_array[i].iov_base)) = UINT8_MAX;
+//         SPDK_WARNLOG("i'm here 4 \n");
+//         SPDK_WARNLOG("%d", UINT8_MAX);
+//         SPDK_WARNLOG("i'm here 5 \n");
 
-    if(spdk_likely(ret == 0))
-    {
-        SPDK_WARNLOG("submit test (write) success\n");
-    } else {
-        SPDK_ERRLOG("submit test (write) fail\n");
-    }
-}
+//     }
 
-void
-submit_read_request_base_bdev(struct raid_bdev *raid_bdev, uint8_t idx)
-{
-    struct spdk_bdev_desc *desc = __base_desc_from_raid_bdev(raid_bdev, idx);
-    struct spdk_bdev *base_bdev = spdk_bdev_desc_get_bdev(desc);
-    struct spdk_io_channel *ch = spdk_bdev_get_io_channel(desc);
-    struct iovec *buffer;
-    container *cont;
-    int ret;
+//     return 0;
+// }
 
-    buffer = alloc_continuous_buffer_part(base_bdev->blocklen, base_bdev->required_alignment);
+// void
+// cd_read_func(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+// {
+//     container *cont = cb_arg;
+//     if(success)
+//     {
+//         SPDK_WARNLOG("test (read) success\n");
+//         SPDK_WARNLOG("\n\n test = %d \n\n", *((uint8_t*)cont->buff->iov_base));
+//     } else {
+//         SPDK_ERRLOG("test (read) fail\n");
+//     }
 
-    cont = calloc(1, sizeof(container));
-    if (cont == NULL){
-        SPDK_ERRLOG("cont alloc failed\n");
-    }
+//     free_continuous_buffer_part(cont->buff);
+//     spdk_bdev_free_io(bdev_io);
+//     free(cont);
+//     SPDK_WARNLOG("test (read) success\n");
+// }
 
-    cont->buff = buffer;
-    cont->idx = 0;
-    cont->raid_bdev = raid_bdev;
-    ret = spdk_bdev_readv_blocks(desc, ch, buffer, 1, 0, 1, cd_read_func, cont);
+// void
+// cd_write_func(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+// {
+//     container *cont = cb_arg;
+//     if(success)
+//     {
+//         SPDK_WARNLOG("test (write) success\n");
+//     } else {
+//         SPDK_ERRLOG("test (write) fail\n");
+//     }
 
-    if(spdk_likely(ret == 0))
-    {
-        SPDK_WARNLOG("submit test (read) success\n");
-    } else {
-        SPDK_ERRLOG("submit test (read) fail\n");
-    }
-}
+//     free_continuous_buffer_part(cont->buff);
+//     spdk_bdev_free_io(bdev_io);
+//     submit_read_request_base_bdev(cont->raid_bdev, cont->idx);
+//     free(cont);
+// }
+
+// void
+// submit_write_request_base_bdev(struct raid_bdev *raid_bdev, uint8_t idx)
+// {
+//     struct spdk_bdev_desc *desc = __base_desc_from_raid_bdev(raid_bdev, idx);
+//     struct spdk_bdev *base_bdev = spdk_bdev_desc_get_bdev(desc);
+//     struct spdk_io_channel *ch = spdk_bdev_get_io_channel(desc);
+//     struct iovec *buffer;
+//     container *cont;
+//     int ret;
+
+
+//     buffer = alloc_continuous_buffer_part(base_bdev->blocklen, base_bdev->required_alignment);
+//     if (fill_ones_write_request(buffer, 1) != 0)
+//     {
+//         SPDK_ERRLOG("fill_ones_write_request was fail\n");
+//     }
+//     cont = calloc(1, sizeof(container));
+//     if (cont == NULL){
+//         SPDK_ERRLOG("cont alloc failed\n");
+//     }
+
+//     cont->buff = buffer;
+//     cont->idx = 0;
+//     cont->raid_bdev = raid_bdev;
+//     ret = spdk_bdev_writev_blocks (desc, ch, buffer, 1, 0, 1, cd_write_func, cont);
+
+//     if(spdk_likely(ret == 0))
+//     {
+//         SPDK_WARNLOG("submit test (write) success\n");
+//     } else {
+//         SPDK_ERRLOG("submit test (write) fail\n");
+//     }
+// }
+
+// void
+// submit_read_request_base_bdev(struct raid_bdev *raid_bdev, uint8_t idx)
+// {
+//     struct spdk_bdev_desc *desc = __base_desc_from_raid_bdev(raid_bdev, idx);
+//     struct spdk_bdev *base_bdev = spdk_bdev_desc_get_bdev(desc);
+//     struct spdk_io_channel *ch = spdk_bdev_get_io_channel(desc);
+//     struct iovec *buffer;
+//     container *cont;
+//     int ret;
+
+//     buffer = alloc_continuous_buffer_part(base_bdev->blocklen, base_bdev->required_alignment);
+
+//     cont = calloc(1, sizeof(container));
+//     if (cont == NULL){
+//         SPDK_ERRLOG("cont alloc failed\n");
+//     }
+
+//     cont->buff = buffer;
+//     cont->idx = 0;
+//     cont->raid_bdev = raid_bdev;
+//     ret = spdk_bdev_readv_blocks(desc, ch, buffer, 1, 0, 1, cd_read_func, cont);
+
+//     if(spdk_likely(ret == 0))
+//     {
+//         SPDK_WARNLOG("submit test (read) success\n");
+//     } else {
+//         SPDK_ERRLOG("submit test (read) fail\n");
+//     }
+// }
 /* ======================================================================== */
