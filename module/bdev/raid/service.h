@@ -18,6 +18,7 @@
 #define ATOMIC_IS_AREA_STR_CLEAR(area_srt) (area_srt)
 #define CREATE_AREA_STR_SNAPSHOT(area_srt_ptr) (*area_srt_ptr)
 #define ATOMIC_INCREMENT(ptr) ((*ptr)++)
+#define ATOMIC_DECREMENT(ptr) ((*ptr)--)
 #define ATOMIC_EXCHANGE(dest_ptr, exc, src) (TEST_CAS(dest_ptr, exc, src))
 // ->
 // TODO: индексы у битов идут справа на лево!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! (все норм?)
@@ -39,11 +40,11 @@ TEST_CAS(ATOMIC_TYPE *ptr, ATOMIC_SNAPSHOT_TYPE exc, ATOMIC_SNAPSHOT_TYPE src)
 
 struct iteration_step
 {
-    int64_t iter_idx;
     int16_t area_idx;
+    int64_t iter_idx;
     struct rebuild_cycle_iteration *iteration;
     struct raid_bdev *raid_bdev;
-    // spdk_bdev_io_completion_cb cb;
+    spdk_bdev_io_completion_cb cb;
 };
 
 
@@ -51,12 +52,12 @@ struct rebuild_cycle_iteration
 {
    /* true if one part of the rebuild cycle is completed */
     bool complete;
+    
+    /* number of broken areas in current area stripe */
+    int16_t br_area_cnt;
 
     /* index of the area stripe for rebuld */
     int64_t iter_idx;
-
-    /* number of broken areas in current area stripe */
-    int16_t br_area_cnt;
 
     /* processed areas counter, it increments after completion rebuild a concrete area */
     ATOMIC_DATA(pr_area_cnt);
@@ -121,11 +122,16 @@ init_cb_arg(struct iteration_step *iter_info,
             struct rebuild_cycle_iteration *iteration, 
             struct raid_bdev *raid_bdev);
 
-
 void
 free_cd_arg(struct iteration_step *cb);
 
 void
 reset_buffer(struct iovec *vec_array, uint32_t len);
+
+uint64_t
+get_area_offset(size_t area_idx, size_t area_size, size_t strip_size);
+
+uint64_t
+get_area_size(size_t area_size, size_t strip_size);
 
 #endif /* SPDK_RAID_SERVICE_INTERNAL_H */

@@ -62,20 +62,30 @@ free_sg_buffer(struct iovec *vec_array, uint64_t len)
     free(vec_array);
 }
 
-static inline struct iovec *
-allocate_sg_buffer(size_t elem_size, size_t elemcnt, size_t elem_per_vec, size_t align)
+uint64_t
+get_area_offset(size_t area_idx, size_t area_size, size_t strip_size)
 {
-    size_t split_steps = SPDK_CEIL_DIV(elemcnt, elem_per_vec);
+    return area_idx*area_size*strip_size;
+} 
 
-    struct iovec *vec_array = calloc(split_steps, sizeof(struct iovec));
+uint64_t
+get_area_size(size_t area_size, size_t strip_size)
+{
+    return area_size*strip_size;
+}
+
+static inline struct iovec *
+allocate_sg_buffer(size_t elem_size, size_t elemcnt, size_t align)
+{
+    struct iovec *vec_array = calloc(elemcnt, sizeof(struct iovec));
     if(vec_array == NULL)
     {
         return NULL;
     }
 
-    for (size_t i = 0; i < split_steps; i++)
+    for (size_t i = 0; i < elemcnt; i++)
     { //TODO: люблю лажать с индексами, проверить, что все ок
-        vec_array[i].iov_len = elem_size*elem_per_vec;
+        vec_array[i].iov_len = elem_size;
         vec_array[i].iov_base = (void*)spdk_dma_zmalloc(sizeof(uint8_t)*vec_array[i].iov_len, align, NULL);
         if(vec_array[i].iov_base == NULL)
         {
@@ -118,17 +128,19 @@ free_base_bdevs_buff(struct raid_bdev *raid_bdev, struct rebuild_progress *cycle
 static inline int
 alloc_base_bdevs_buff(struct raid_bdev *raid_bdev, struct rebuild_progress *cycle_progress)
 {
-    uint64_t elem_size = spdk_bdev_get_block_size(&(raid_bdev->bdev));
-
-    for (uint8_t i = 0; i < raid_bdev->num_base_bdevs; i++)
+    uint64_t elem_size = spdk_bdev_get_block_size(&(raid_bdev->bdev))*raid_bdev->strip_size;
+    uint8_t i = 0;
+    struct raid_base_bdev_info *base_info;
+    
+    RAID_FOR_EACH_BASE_BDEV(raid_bdev, base_info)
     {
-        struct spdk_bdev *bbdev = spdk_bdev_desc_get_bdev(raid_bdev->base_bdev_info[i].desc);
+        struct spdk_bdev *bbdev = spdk_bdev_desc_get_bdev(base_info->desc);
         if(spdk_bdev_get_write_unit_size(bbdev) != 1)
         {
             SPDK_WARNLOG("Unsupported write_unit_size in base bdev of raid");
         }
         
-        cycle_progress->base_bdevs_sg_buf[i] = allocate_sg_buffer(elem_size, raid_bdev->rebuild->strips_per_area, raid_bdev->strip_size, bbdev->required_alignment);
+        cycle_progress->base_bdevs_sg_buf[i] = allocate_sg_buffer(elem_size, raid_bdev->rebuild->strips_per_area, bbdev->required_alignment);
         if (cycle_progress->base_bdevs_sg_buf[i] == NULL)
         {
             _free_base_bdevs_buff(raid_bdev, cycle_progress, i);
@@ -373,6 +385,13 @@ run_rebuild_poller(void* arg)
         }
         
         ret = raid_bdev->module->rebuild_request(raid_bdev, cycle_progress, continue_rebuild);
+        switch (ret)
+        {
+        case -ENOMEM:
+        case -EIO:
+            finish_rebuild_cycle(raid_bdev);
+            break;
+        }
     } else {
         SPDK_ERRLOG("rebuild_request inside raid%d doesn't implemented\n", raid_bdev->level);
         return -ENODEV;
