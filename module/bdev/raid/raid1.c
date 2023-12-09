@@ -14,6 +14,17 @@ struct raid1_info {
 	struct raid_bdev *raid_bdev;
 };
 
+struct rebuild_first_stage_cb
+{
+	uint8_t buf_idx;
+	uint64_t pd_lba;
+	uint64_t pd_blocks;
+	struct rebuild_progress *cycle_progress;
+	struct raid_bdev *raid_bdev;
+	spdk_bdev_io_completion_cb cb;
+};
+
+
 /* Find the bdev index of the current IO request */
 static uint32_t
 get_current_bdev_idx(struct spdk_bdev_io *bdev_io, struct raid_bdev_io *raid_io, uint32_t *bdev_idx)
@@ -317,26 +328,62 @@ raid1_stop(struct raid_bdev *raid_bdev)
 	return true;
 }
 
+void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+{
+}
+
 static int
 raid1_submit_rebuild_request(struct raid_bdev *raid_bdev, struct rebuild_progress *cycle_progress, spdk_bdev_io_completion_cb cb)
 {
 	struct raid_rebuild *rebuild = raid_bdev->rebuild;
+	struct rebuild_cycle_iteration *cycle_iter = &(cycle_progress->cycle_iteration);
+	struct rebuild_first_stage_cb *cb_arg = calloc(1, sizeof(struct rebuild_first_stage_cb));;
+	uint8_t base_idx = 0;
+	int ret = 0;
+	int idx = 0;
+	struct spdk_bdev_desc *desc; /*__base_desc_from_raid_bdev(raid_bdev, idx);*/
+    struct spdk_io_channel *ch = NULL; /*spdk_bdev_get_io_channel(desc)*/
+    struct spdk_bdev *base_bdev; /*spdk_bdev_desc_get_bdev(desc);*/
+	struct raid_base_bdev_info *base_info;
+	uint64_t pd_lba, pd_blocks;
+	if (cb_arg == NULL)
+	{
+		return -ENOMEM;
+	}
 
-	/* area size in strips */
-    uint64_t area_size = rebuild->strips_per_area;
-    /* strip size in blocks */
-    uint32_t strip_size = raid_bdev->strip_size;
-    /* block size in bytes */
-    uint32_t block_size = spdk_bdev_get_block_size(&(raid_bdev->bdev));
+	pd_lba = get_area_offset(cycle_iter->iter_progress, rebuild->strips_per_area, raid_bdev->strip_size);
+	pd_blocks = get_area_size(rebuild->strips_per_area, raid_bdev->strip_size);
 
-	struct iteration_step *cb_arg = NULL;
+	RAID_FOR_EACH_BASE_BDEV(raid_bdev, base_info) {
+		desc = base_info->desc;
+		base_bdev = spdk_bdev_desc_get_bdev(desc);
+		ch = spdk_bdev_get_io_channel(desc);
+		if (ch != NULL) {
+			break;
+		}
+		idx++;
+	}
 
+	if (ch == NULL) {
+		return -EIO;
+	}
+	cb_arg->cb = cb;
+	cb_arg->pd_lba = pd_lba;
+	cb_arg->pd_blocks = pd_blocks;
+	cb_arg->raid_bdev = raid_bdev;
+	cb_arg->cycle_progress = cycle_progress;
+	cb_arg->buf_idx = base_idx;
 
-	
-
-	//TODO: Реализовать вот это.
-
-	return 0;
+	ret = spdk_bdev_writev_blocks(desc, ch, 
+						  cycle_progress->base_bdevs_sg_buf[base_idx], 
+						  rebuild->strips_per_area, 
+						  pd_lba, pd_blocks, 
+						  raid1_submit_rebuild_second_stage, cb_arg);
+	if (ret != 0)
+	{
+		/* TODO: Handle this case */
+	}
+	return ret;
 }
 
 static struct raid_bdev_module g_raid1_module = {
