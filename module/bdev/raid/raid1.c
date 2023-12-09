@@ -328,6 +328,7 @@ raid1_stop(struct raid_bdev *raid_bdev)
 	return true;
 }
 
+static
 void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
 {
 	struct rebuild_first_stage_cb *info = cb_arg;
@@ -336,7 +337,6 @@ void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool succes
 	struct raid_base_bdev_info *base_info;
 	struct spdk_bdev_desc *desc; /* __base_desc_from_raid_bdev(raid_bdev, idx); */
     struct spdk_io_channel *ch; /* spdk_bdev_get_io_channel(desc); */
-    struct spdk_bdev *base_bdev; /* spdk_bdev_desc_get_bdev(desc); */
 	struct iteration_step *cb_arg_new = NULL;
 	uint8_t idx = 0;
 	int ret = 0;
@@ -349,7 +349,6 @@ void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool succes
 
 	RAID_FOR_EACH_BASE_BDEV(raid_bdev, base_info) {
 		desc = base_info->desc;
-		base_bdev = spdk_bdev_desc_get_bdev(desc);
 		ch = spdk_bdev_get_io_channel(desc);
 		if (!SPDK_TEST_BIT(&(cycle_iteration->br_area_cnt), idx)) {
 			idx++;
@@ -362,6 +361,10 @@ void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool succes
 						  raid_bdev->rebuild->strips_per_area, 
 						  info->pd_lba, info->pd_blocks, 
 						  info->cb, cb_arg_new);
+
+		if (spdk_unlikely(ret != 0)) {
+			info->cb(NULL, false, cb_arg_new);
+		}
 		idx++;
 	}
 
@@ -379,7 +382,6 @@ raid1_submit_rebuild_request(struct raid_bdev *raid_bdev, struct rebuild_progres
 	int ret = 0;
 	struct spdk_bdev_desc *desc; /*__base_desc_from_raid_bdev(raid_bdev, idx);*/
     struct spdk_io_channel *ch = NULL; /*spdk_bdev_get_io_channel(desc)*/
-    struct spdk_bdev *base_bdev; /*spdk_bdev_desc_get_bdev(desc);*/
 	struct raid_base_bdev_info *base_info;
 	uint64_t pd_lba, pd_blocks;
 	if (cb_arg == NULL)
@@ -392,7 +394,6 @@ raid1_submit_rebuild_request(struct raid_bdev *raid_bdev, struct rebuild_progres
 
 	RAID_FOR_EACH_BASE_BDEV(raid_bdev, base_info) {
 		desc = base_info->desc;
-		base_bdev = spdk_bdev_desc_get_bdev(desc);
 		ch = spdk_bdev_get_io_channel(desc);
 		if (ch != NULL) {
 			break;

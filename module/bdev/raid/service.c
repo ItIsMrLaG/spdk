@@ -276,7 +276,10 @@ continue_rebuild(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
     int ret = 0;
 
     free_cd_arg(cb_arg);
-    spdk_bdev_free_io(bdev_io);
+    if(bdev_io != NULL){
+        // bdev_io->iov = NULL;
+        spdk_bdev_free_io(bdev_io);
+    }
     partly_submit_iteration(success, iter_idx, area_idx, raid_bdev->rebuild);
 
     /* Test whether the end of the iteration or not */
