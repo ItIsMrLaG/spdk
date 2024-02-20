@@ -14,8 +14,6 @@
 #include "bdev_raid.h"
 #include "service.h"
 
-#define DEBUG__
-
 /* ======================= Poller functionality =========================== */
 
 /*
@@ -30,7 +28,6 @@ partly_submit_iteration(bool result ,uint64_t iter_idx, uint16_t area_idx, struc
     {
         SPDK_REMOVE_BIT(&(rebuild->rebuild_matrix[iter_idx]), area_idx);
     }
-
     ATOMIC_INCREMENT(&(iter->pr_area_cnt));
 }
 
@@ -63,7 +60,7 @@ get_area_offset(size_t area_idx, size_t area_size, size_t strip_size)
 } 
 
 uint64_t
-get_area_size(size_t area_size, size_t strip_size)
+get_area_size(size_t area_size /* in strips */, size_t strip_size)
 {
     return area_size*strip_size;
 }
@@ -140,6 +137,8 @@ alloc_base_bdevs_buff(struct raid_bdev *raid_bdev, struct rebuild_progress *cycl
             _free_base_bdevs_buff(raid_bdev, cycle_progress, i);
             return -ENOMEM;
         }
+
+        i++;
     }
     return 0;
 }
@@ -179,6 +178,9 @@ init_rebuild_cycle(struct rebuild_progress *cycle_progress, struct raid_bdev *ra
 
         cycle_progress->area_str_cnt += 1;
     }
+#ifdef DEBUG__
+    SPDK_NOTICELOG("Number of areas stripes with broken areas: %lu \n", cycle_progress->area_str_cnt);
+#endif
 
     if (start_idx != NOT_NEED_REBUILD)
     {
@@ -292,7 +294,6 @@ continue_rebuild(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
     /* Wether it is the last iteration or not */
     if(cycle_progress->clear_area_str_cnt == cycle_progress->area_str_cnt)
     {
-
         SPDK_SET_BIT(&(raid_bdev->rebuild->rebuild_flag), REBUILD_FLAG_FINISH);
         return;
     }
@@ -316,8 +317,19 @@ run_rebuild_poller(void* arg)
     struct rebuild_progress *cycle_progress = NULL;
     int ret = 0;
 
+#ifdef RECOVERY_TEST
+    if (rebuild->timer < 40){
+        rebuild->timer += 1;
+        return 0;
+    } else if (rebuild->timer == 40){
+        rebuild->off_dev_ind = 1;
+        SPDK_NOTICELOG("\nRaid1 has inited with base devise [ind=0] \n");
+        rebuild->timer += 1;
+    }
+#endif
+
 #ifdef DEBUG__
-    SPDK_WARNLOG("poller is working now with: %s!\n", raid_bdev->bdev.name);
+    // SPDK_NOTICELOG("poller is working now with: %s!\n", raid_bdev->bdev.name);
 #endif
 
     if (rebuild == NULL)
@@ -330,6 +342,9 @@ run_rebuild_poller(void* arg)
         /*
          * the rebuild structure has not yet been initialized
          */
+#ifdef DEBUG__
+    SPDK_NOTICELOG("Wait for rebuild structure initialization\n");
+#endif
         return 0;
     }
     if (SPDK_TEST_BIT(&(rebuild->rebuild_flag), REBUILD_FLAG_FATAL_ERROR))
@@ -341,13 +356,24 @@ run_rebuild_poller(void* arg)
     {
         /*
          * Previous recovery process is not complete
-         */
+         */       
         if (SPDK_TEST_BIT(fl(rebuild), REBUILD_FLAG_FINISH))
         {
+#ifdef DEBUG__
+    SPDK_NOTICELOG("Finish recovery process\n");
+#endif      
+
+#ifdef RECOVERY_TEST
+        SPDK_NOTICELOG("# --------------- #\nFinish recovery process\n");
+#endif
             finish_rebuild_cycle(raid_bdev);
+
         }
         return 0;
     }
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n\nInit rebuild process\n\n");
+#endif 
 
     cycle_progress = calloc(1, sizeof(struct rebuild_progress));
 

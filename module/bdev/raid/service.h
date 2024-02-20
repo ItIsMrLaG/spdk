@@ -10,12 +10,15 @@
 #include "atomic_raid.h"
 #include "bdev_raid.h"
 
+#define RECOVERY_TEST
+#define DEBUG__
+
 //->
 #define __base_desc_from_raid_bdev(raid_bdev, idx) (raid_bdev->base_bdev_info[idx].desc)
 #define fl(rebuild) &(rebuild->rebuild_flag)
 #define NOT_NEED_REBUILD -1
 //->
-#define ATOMIC_IS_AREA_STR_CLEAR(ptr) (*ptr)
+#define ATOMIC_IS_AREA_STR_CLEAR(ptr) (*ptr == 0)
 #define CREATE_AREA_STR_SNAPSHOT(area_srt_ptr) raid_atomic64_read(area_srt_ptr)
 #define ATOMIC_INCREMENT(ptr) raid_atomic64_inc(ptr)
 #define ATOMIC_DECREMENT(ptr) raid_atomic64_dec(ptr)

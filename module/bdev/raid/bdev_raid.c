@@ -1014,7 +1014,7 @@ raid_bdev_create(const char *name, uint32_t strip_size, uint8_t num_base_bdevs,
 				SPDK_ERRLOG("Unable to allocate memory for raid rebuild struct\n");
 				return -ENOMEM;
 			}
-			raid_bdev->rebuild_poller = SPDK_POLLER_REGISTER(run_rebuild_poller, raid_bdev, 2000);
+			raid_bdev->rebuild_poller = SPDK_POLLER_REGISTER(run_rebuild_poller, raid_bdev, 1000000);
 			break;
 		default:
 			raid_bdev->rebuild = NULL;

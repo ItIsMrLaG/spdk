@@ -19,7 +19,7 @@
 
 #define BASE_BDEVS_MAX_NUM 64
 
-// #include "service.h"
+#include "service.h"
 
 enum rebuild_flag {
 	/* rebuild flag set during initialization */
@@ -96,6 +96,13 @@ struct raid_rebuild {
 	 * (i.e. when cycle_progress == NULL) 
 	 */ 
 	struct rebuild_progress *cycle_progress;
+
+#ifdef RECOVERY_TEST
+    int off_dev_ind;
+	
+	// time == 15 seconds
+	int timer;
+#endif
 };
 
 /*

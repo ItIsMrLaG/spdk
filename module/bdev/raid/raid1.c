@@ -74,6 +74,10 @@ write_in_rbm_broken_block(struct spdk_bdev_io *bdev_io, struct raid_bdev_io *rai
 	for (uint64_t i = offset_areas; i < offset_areas + num_areas; i++) {
 		uint64_t *area = &raid_io->raid_bdev->rebuild->rebuild_matrix[i];
 		SPDK_SET_BIT(area, bdev_idx);
+#ifdef RECOVERY_TEST
+	SPDK_NOTICELOG("info: (c:%lu x r:%u)\n", i, bdev_idx);
+	SPDK_NOTICELOG("at all: %lu\n", num_areas);
+#endif
 	}
 }
 
@@ -145,7 +149,19 @@ raid1_submit_read_request(struct raid_bdev_io *raid_io)
 	uint64_t pd_lba, pd_blocks;
 	int ret;
 
+#ifdef RECOVERY_TEST
+	int counter = 0;
+#endif
+
 	RAID_FOR_EACH_BASE_BDEV(raid_bdev, base_info) {
+		
+#ifdef RECOVERY_TEST		
+		if (raid_bdev->rebuild->off_dev_ind == 0 && counter == 0) {
+			counter += 1;
+			continue;
+		}
+#endif
+
 		base_ch = raid_io->raid_ch->base_channel[idx];
 		if (base_ch != NULL) {
 			get_bdev_rebuild_status(raid_bdev, bdev_io, idx);
@@ -159,6 +175,11 @@ raid1_submit_read_request(struct raid_bdev_io *raid_io)
 
 	if (base_ch == NULL) {
 		raid_bdev_io_complete(raid_io, SPDK_BDEV_IO_STATUS_FAILED);
+
+#ifdef RECOVERY_TEST		
+	SPDK_ERRLOG("Problems with RECOVERY_TEST condition \n");
+#endif
+
 		return 0;
 	}
 
@@ -172,6 +193,9 @@ raid1_submit_read_request(struct raid_bdev_io *raid_io)
 					 bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt,
 					 pd_lba, pd_blocks, raid1_bdev_io_completion,
 					 raid_io, &io_opts);
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n======read========\n 1) offset: %lu \n 2) block_num: %lu \n==============\n", pd_lba, pd_blocks);
+#endif
 
 	if (spdk_likely(ret == 0)) {
 		raid_io->base_bdev_io_submitted++;
@@ -209,12 +233,21 @@ raid1_submit_write_request(struct raid_bdev_io *raid_io)
 		base_info = &raid_bdev->base_bdev_info[idx];
 		base_ch = raid_io->raid_ch->base_channel[idx];
 
+#ifdef RECOVERY_TEST		
+		if (raid_bdev->rebuild->off_dev_ind == 0 && idx == 0) base_ch = NULL;
+#endif		
+
 		if (base_ch == NULL) {
 			raid_io->base_bdev_io_submitted++;
 
 			write_in_rbm_broken_block(bdev_io, raid_io, idx);
 
 			raid_bdev_io_complete_part(raid_io, 1, SPDK_BDEV_IO_STATUS_SUCCESS);
+
+#ifdef RECOVERY_TEST		
+	SPDK_ERRLOG("\n!!! base_bdev [ind=0] don't remove it ==> {%s} !!!\n", base_info->name);
+#endif
+
 			continue;
 		}
 
@@ -222,6 +255,12 @@ raid1_submit_write_request(struct raid_bdev_io *raid_io)
 						  bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt,
 						  pd_lba, pd_blocks, raid1_bdev_io_completion,
 						  raid_io, &io_opts);
+
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n======write========\n 1) offset: %lu \n 2) block_num: %lu \n==============\n", pd_lba, pd_blocks);
+#endif
+
+
 		if (spdk_unlikely(ret != 0)) {
 			if (spdk_unlikely(ret == -ENOMEM)) {
 				raid_bdev_queue_io_wait(raid_io, spdk_bdev_desc_get_bdev(base_info->desc),
@@ -277,6 +316,15 @@ init_rebuild(struct raid_bdev *raid_bdev)
 	raid_bdev->rebuild->num_memory_areas = stripcnt / raid_bdev->rebuild->strips_per_area;
 	raid_bdev->rebuild->rebuild_flag = REBUILD_FLAG_INIT_CONFIGURATION;
 	SPDK_SET_BIT(&(raid_bdev->rebuild->rebuild_flag), REBUILD_FLAG_INITIALIZED);
+
+#ifdef DEBUG__
+    SPDK_NOTICELOG("strip_size: %u | area_size: %lu | num_memory_areas: %lu !\n", raid_bdev->strip_size, raid_bdev->rebuild->strips_per_area, raid_bdev->rebuild->num_memory_areas);
+#endif
+
+#ifdef RECOVERY_TEST
+	raid_bdev->rebuild->off_dev_ind = 0;
+    SPDK_NOTICELOG("\n# !!!!! #\nRaid1 has inited without base devise [ind=0] \n");
+#endif
 }
 
 static void
@@ -341,9 +389,14 @@ void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool succes
 	uint8_t idx = 0;
 	int ret = 0;
 	
+#ifdef RECOVERY_TEST
+	SPDK_NOTICELOG("\nSecond Stage\n");
+#endif
+
 	if (!success)
 	{
 		//TODO: Handle this case (mb add new flag FIRST_STAGE_ERROR)
+		SPDK_WARNLOG("Problem before firs rebuild stage RAID1\n");
 		return;
 	}
 
@@ -358,12 +411,19 @@ void raid1_submit_rebuild_second_stage(struct spdk_bdev_io *bdev_io, bool succes
 		// if (spdk_unlikely(ret != 0)) {
 			// info->cb(NULL, false, cb_arg_new);
 		// }
+#ifdef RECOVERY_TEST
+	SPDK_NOTICELOG("\nDevice for recover: %s\n", base_info->name);
+#endif	
 		cb_arg_new = alloc_cb_arg(cycle_iteration->iter_idx, idx, cycle_iteration, raid_bdev);
 		ret = spdk_bdev_writev_blocks(desc, ch, 
 						  raid_bdev->rebuild->cycle_progress->base_bdevs_sg_buf[info->buf_idx], 
 						  raid_bdev->rebuild->strips_per_area, 
 						  info->pd_lba, info->pd_blocks, 
 						  info->cb, cb_arg_new);
+
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n======ss-write========\n 1) offset: %lu \n 2) block_num: %lu \n==============\n", info->pd_lba, info->pd_blocks);
+#endif
 
 		if (spdk_unlikely(ret != 0)) {
 			info->cb(NULL, false, cb_arg_new);
@@ -387,20 +447,36 @@ raid1_submit_rebuild_request(struct raid_bdev *raid_bdev, struct rebuild_progres
     struct spdk_io_channel *ch = NULL; /*spdk_bdev_get_io_channel(desc)*/
 	struct raid_base_bdev_info *base_info;
 	uint64_t pd_lba, pd_blocks;
+	uint8_t idx = 0;
 	if (cb_arg == NULL)
 	{
 		return -ENOMEM;
 	}
 
-	pd_lba = get_area_offset(cycle_iter->iter_progress, rebuild->strips_per_area, raid_bdev->strip_size);
+	pd_lba = get_area_offset(cycle_iter->iter_idx, rebuild->strips_per_area, raid_bdev->strip_size);
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n--------pd_lba--------\n 1) area_idx: %lu \n 2) area_size: %lu \n 3) strip_size: %u \n----------------\n", cycle_iter->iter_idx, rebuild->strips_per_area, raid_bdev->strip_size);
+#endif
+
 	pd_blocks = get_area_size(rebuild->strips_per_area, raid_bdev->strip_size);
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n--------pd_blocks--------\n 1) area_size: %lu \n 1) strip_size: %u \n----------------\n", rebuild->strips_per_area, raid_bdev->strip_size);
+#endif
+
+#ifdef RECOVERY_TEST
+	SPDK_NOTICELOG("\nFirst Stage\n");
+#endif
 
 	RAID_FOR_EACH_BASE_BDEV(raid_bdev, base_info) {
 		desc = base_info->desc;
 		ch = spdk_bdev_get_io_channel(desc);
-		if (ch != NULL) {
+		if (ch != NULL && !SPDK_TEST_BIT(&(cycle_iter->br_area_cnt), idx)) {
+#ifdef RECOVERY_TEST
+	SPDK_NOTICELOG("\nDevice for read: %s\n", base_info->name);
+#endif			
 			break;
 		}
+		idx++;
 	}
 
 	if (ch == NULL) {
@@ -419,6 +495,11 @@ raid1_submit_rebuild_request(struct raid_bdev *raid_bdev, struct rebuild_progres
 						  rebuild->strips_per_area, 
 						  pd_lba, pd_blocks, 
 						  raid1_submit_rebuild_second_stage, cb_arg);
+
+#ifdef DEBUG__
+    SPDK_NOTICELOG("\n======fs-read========\n 1) offset: %lu \n 2) block_num: %lu \n==============\n", pd_lba, pd_blocks);
+#endif
+
 	if (ret != 0)
 	{
 		/* TODO: Handle this case */
